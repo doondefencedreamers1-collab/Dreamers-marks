@@ -8,9 +8,12 @@ import {
   Plus, ChevronRight, ArrowLeft, Calendar, Trash2, Pencil, X, Search,
   Trophy, Activity, FileText, Hash, Upload, LogOut,
   ShieldCheck, User, Lock, Mail, RefreshCw, AlertCircle, FileSpreadsheet, Download, CheckCircle2,
+  HeartPulse, Sparkles, AlertTriangle, TrendingDown, Crown, Flame, Star, Zap, Shield, Swords, Gauge,
+  ArrowUp, ArrowDown, Minus, Home,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
+import * as A from "./analytics.js";
 
 /* ───────────────────────── Config ───────────────────────── */
 
@@ -31,9 +34,21 @@ const DEFAULT_SUBJECTS = {
   cds:     [{ name: "English", maxMarks: 100 }, { name: "General Knowledge", maxMarks: 100 }, { name: "Elementary Maths", maxMarks: 100 }],
 };
 
+// Houses — yahan naam/colour badal sakte hain (apne coaching ke houses ke hisaab se)
+const HOUSES = {
+  Shivaji: "#f5b544",
+  Tagore:  "#34d399",
+  Ashoka:  "#60a5fa",
+  Raman:   "#fb7185",
+};
+const HOUSE_NAMES = Object.keys(HOUSES);
+const houseColor = (h) => HOUSES[h] || "#8a94ad";
+
+const BADGE_ICONS = { Crown, Flame, Shield, Swords, Star, TrendingUp, CheckCircle2 };
+
 /* ───────────────────────── Mapping (DB <-> app) ───────────────────────── */
 
-const mapStudent = (r) => ({ id: r.id, name: r.name, roll: r.roll, category: r.category });
+const mapStudent = (r) => ({ id: r.id, name: r.name, roll: r.roll, category: r.category, house: r.house || "" });
 const mapTest = (r) => ({
   id: r.id, studentId: r.student_id, category: r.category, testName: r.test_name,
   date: r.test_date, subjects: r.subjects || [],
@@ -100,8 +115,8 @@ export default function App() {
 
   /* mutations (director only — RLS enforced on server) */
   const mut = {
-    addStudent: async (s) => { await supabase.from("students").insert({ name: s.name, roll: s.roll, category: s.category }); fetchAll(); },
-    updateStudent: async (s) => { await supabase.from("students").update({ name: s.name, roll: s.roll, category: s.category }).eq("id", s.id); fetchAll(); },
+    addStudent: async (s) => { await supabase.from("students").insert({ name: s.name, roll: s.roll, category: s.category, house: s.house || null }); fetchAll(); },
+    updateStudent: async (s) => { await supabase.from("students").update({ name: s.name, roll: s.roll, category: s.category, house: s.house || null }).eq("id", s.id); fetchAll(); },
     deleteStudent: async (id) => { await supabase.from("students").delete().eq("id", id); fetchAll(); },
     addTest: async (t) => { await supabase.from("tests").insert(testToRow(t)); fetchAll(); },
     updateTest: async (t) => { await supabase.from("tests").update(testToRow(t)).eq("id", t.id); fetchAll(); },
@@ -115,7 +130,7 @@ export default function App() {
       const toCreate = parsed.filter((p) => !rollToId[p.roll] && p.name && !seen.has(p.roll) && seen.add(p.roll));
       if (toCreate.length) {
         const { data: ins } = await supabase.from("students")
-          .insert(toCreate.map((p) => ({ name: p.name, roll: p.roll, category }))).select();
+          .insert(toCreate.map((p) => ({ name: p.name, roll: p.roll, category, house: p.house || null }))).select();
         (ins || []).forEach((s) => { rollToId[s.roll] = s.id; created++; });
       }
       const testRows = [];
@@ -269,6 +284,7 @@ function Director({ data, mut, synced, onLogout }) {
             onOpenStudent={(s) => { setActiveStudentId(s.id); setView("student"); }} />
         ) : liveStudent ? (
           <StudentView student={liveStudent} tests={studentTests(liveStudent.id)} rankOf={rankOf} readOnly={false}
+            allTests={data.tests} allStudents={data.students}
             onBack={() => setView("category")}
             onAddTest={() => setTestModal({ studentId: liveStudent.id, category: liveStudent.category })}
             onEditTest={(t) => setTestModal({ studentId: liveStudent.id, category: liveStudent.category, edit: t })}
@@ -292,7 +308,7 @@ function Director({ data, mut, synced, onLogout }) {
           onAddStudent={(category) => { setUploadPicker(false); setStudentModal({ category }); }} />
       )}
       {bulkModal && (
-        <BulkUploadModal catStudents={catStudents} onClose={() => setBulkModal(false)} onConfirm={mut.bulkUpload} />
+        <BulkUploadModal catStudents={catStudents} existingTests={data.tests} onClose={() => setBulkModal(false)} onConfirm={mut.bulkUpload} />
       )}
     </>
   );
@@ -316,7 +332,7 @@ function Student({ data, roll, synced, onLogout }) {
           <div className="empty"><AlertCircle size={32} /><p>Aapka record ab available nahi hai. Director se sampark karein.</p>
             <button className="btn primary" onClick={onLogout}>Login screen</button></div>
         ) : (
-          <StudentView student={student} tests={tests} rankOf={rankOf} readOnly={true} />
+          <StudentView student={student} tests={tests} rankOf={rankOf} readOnly={true} allTests={data.tests} allStudents={data.students} />
         )}
       </main>
     </>
@@ -331,6 +347,9 @@ function Dashboard({ data, catStudents, studentTests, onOpenCategory, onUpload, 
   const avgPct = data.tests.length ? round(data.tests.reduce((a, t) => a + t.percentage, 0) / data.tests.length) : 0;
   const recent = [...data.tests].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
   const studentName = (id) => data.students.find((s) => s.id === id)?.name || "—";
+  const atRisk = A.atRiskStudents(data.students, data.tests).slice(0, 6);
+  const improvers = A.topImprovers(data.students, data.tests, 5);
+  const houseLb = A.houseLeaderboard(data.students, data.tests);
 
   return (
     <div className="fade-in">
@@ -379,6 +398,50 @@ function Dashboard({ data, catStudents, studentTests, onOpenCategory, onUpload, 
             </div>); })}
         </div>
       )}
+
+      {/* ── House Leaderboard ── */}
+      {houseLb.length > 0 && (<>
+        <h2 className="section-label">House Leaderboard</h2>
+        <div className="house-lb">
+          {houseLb.map((h) => (
+            <div className="house-lb-row" key={h.house} style={{ "--c": houseColor(h.house) }}>
+              <span className="lb-rank">#{h.rank}</span>
+              <span className="lb-dot" />
+              <div className="lb-main"><div className="lb-name">{h.house}</div>
+                <div className="lb-sub">{h.students} students · {h.tests} tests{h.top ? " · Top: " + h.top.name : ""}</div></div>
+              <div className="lb-avg" style={{ color: pctColor(h.avg) }}>{h.avg}%</div>
+            </div>
+          ))}
+        </div>
+      </>)}
+
+      {/* ── At-Risk Students ── */}
+      {atRisk.length > 0 && (<>
+        <h2 className="section-label"><AlertTriangle size={15} style={{ verticalAlign: "-2px", color: "#fb7185" }} /> At-Risk Students</h2>
+        <div className="risk-list">
+          {atRisk.map(({ student, avg, latest, reasons }) => { const cc = CATEGORIES[student.category]; return (
+            <div className="risk-row" key={student.id}>
+              <span className="tag" style={{ "--c": cc.color }}>{cc.short}</span>
+              <div className="risk-main"><div className="risk-name">{student.name} <small>Roll {student.roll}{student.house ? " · " + student.house : ""}</small></div>
+                <div className="risk-reasons">{reasons.join(" · ")}</div></div>
+              <div className="risk-nums"><b style={{ color: pctColor(latest) }}>{latest}%</b><small>avg {avg}%</small></div>
+            </div>); })}
+        </div>
+      </>)}
+
+      {/* ── Top Improvers ── */}
+      {improvers.length > 0 && (<>
+        <h2 className="section-label"><Flame size={15} style={{ verticalAlign: "-2px", color: "#f5b544" }} /> Top Improvers</h2>
+        <div className="risk-list">
+          {improvers.map(({ student, gain, from, to }) => { const cc = CATEGORIES[student.category]; return (
+            <div className="risk-row" key={student.id}>
+              <span className="tag" style={{ "--c": cc.color }}>{cc.short}</span>
+              <div className="risk-main"><div className="risk-name">{student.name} <small>Roll {student.roll}</small></div>
+                <div className="risk-reasons">{from}% → {to}% average</div></div>
+              <div className="risk-nums"><b style={{ color: "#34d399" }}>+{gain}%</b><small>improvement</small></div>
+            </div>); })}
+        </div>
+      </>)}
     </div>
   );
 }
@@ -446,7 +509,10 @@ function CategoryView({ cat, students, studentTests, onBack, onAddStudent, onOpe
             {filtered.map((r) => (
               <button key={r.s.id} className="student-card" onClick={() => onOpenStudent(r.s)} style={{ "--c": c.color }}>
                 <div className="avatar">{r.s.name.charAt(0).toUpperCase()}</div>
-                <div className="student-main"><div className="student-name">{r.s.name}</div><div className="student-roll">{r.s.roll ? "Roll " + r.s.roll : "No roll no."}</div></div>
+                <div className="student-main"><div className="student-name">{r.s.name}</div>
+                  <div className="student-roll">{r.s.roll ? "Roll " + r.s.roll : "No roll no."}
+                    {r.s.house && <span className="house-tag" style={{ "--c": houseColor(r.s.house) }}><span className="house-dot" /> {r.s.house}</span>}
+                  </div></div>
                 <div className="student-metrics">
                   <div className="m"><span className="m-val" style={{ color: r.latest != null ? pctColor(r.latest) : "#5a6478" }}>{r.latest != null ? round(r.latest) + "%" : "—"}</span><span className="m-lab">Latest</span></div>
                   <div className="m"><span className="m-val">{r.avg || "—"}{r.avg ? "%" : ""}</span><span className="m-lab">Avg</span></div>
@@ -463,9 +529,10 @@ function CategoryView({ cat, students, studentTests, onBack, onAddStudent, onOpe
 
 /* ───────────────────────── Student View ───────────────────────── */
 
-function StudentView({ student, tests, rankOf, readOnly, onBack, onAddTest, onEditTest, onDeleteTest, onEditStudent, onDeleteStudent }) {
+function StudentView({ student, tests, rankOf, readOnly, allTests = [], allStudents = [], onBack, onAddTest, onEditTest, onDeleteTest, onEditStudent, onDeleteStudent }) {
   const c = CATEGORIES[student.category];
   const [confirmDel, setConfirmDel] = useState(false);
+  const [confirmTest, setConfirmTest] = useState(null);
   const avg = tests.length ? round(tests.reduce((a, t) => a + t.percentage, 0) / tests.length) : 0;
   const best = tests.length ? round(Math.max(...tests.map((t) => t.percentage))) : 0;
   const latest = tests.length ? round(tests[tests.length - 1].percentage) : 0;
@@ -478,13 +545,30 @@ function StudentView({ student, tests, rankOf, readOnly, onBack, onAddTest, onEd
   }));
   const subjData = Object.entries(subjMap).map(([name, v]) => ({ name, pct: round(v.sum / v.n) }));
 
+  // ---- analytics (rule-based, from existing data) ----
+  const health = A.healthScore(tests);
+  const predicted = A.predictNext(tests);
+  const target = A.nextTarget(tests);
+  const sStats = A.subjectStats(tests);
+  const bwTest = A.bestWorstTest(tests);
+  const tl = A.trendLabel(tests);
+  const arrows = A.trendArrows(tests);
+  const move = A.rankMovement(allTests, tests);
+  const lastTest = tests.length ? tests[tests.length - 1] : null;
+  const houseRank = lastTest ? A.houseRankForTest(allTests, allStudents, lastTest) : null;
+  const myBadges = A.badges(tests, { classRank: latestRank?.rank });
+  const message = A.motivationMessage(tests);
+  const plan = A.smartPlan(tests);
+
   return (
     <div className="fade-in">
       {!readOnly && <button className="back-btn" onClick={onBack}><ArrowLeft size={16} /> {c.label}</button>}
       <div className="student-head" style={{ "--c": c.color }}>
         <div className="avatar lg">{student.name.charAt(0).toUpperCase()}</div>
         <div className="student-head-main"><h1 className="page-title">{student.name}</h1>
-          <p className="page-desc"><span className="tag inline" style={{ "--c": c.color }}>{c.label}</span>{student.roll ? " · Roll " + student.roll : ""}</p></div>
+          <p className="page-desc"><span className="tag inline" style={{ "--c": c.color }}>{c.label}</span>
+            {student.house && <span className="tag inline" style={{ "--c": houseColor(student.house), marginLeft: 6 }}>{student.house} House</span>}
+            {student.roll ? " · Roll " + student.roll : ""}</p></div>
         {!readOnly && (<div className="student-head-actions">
           <button className="btn ghost icon" onClick={onEditStudent} title="Edit"><Pencil size={15} /></button>
           <button className="btn ghost icon danger" onClick={() => setConfirmDel(true)} title="Delete"><Trash2 size={15} /></button>
@@ -502,6 +586,94 @@ function StudentView({ student, tests, rankOf, readOnly, onBack, onAddTest, onEd
           {!readOnly && <button className="btn primary" onClick={onAddTest}><Plus size={16} /> Pehla test add karo</button>}</div>
       ) : (
         <>
+          {/* ── Performance Health + Predicted + Trend ── */}
+          <div className="insight-grid3">
+            <div className="health-card" style={{ "--c": health.color }}>
+              <div className="health-top"><HeartPulse size={16} /> Performance Health</div>
+              <div className="health-score">{health.score}<small>/100</small></div>
+              <div className="health-grade" style={{ color: health.color }}>{health.grade}</div>
+            </div>
+            <div className="ins-card">
+              <div className="ins-top"><Gauge size={15} /> Predicted Next</div>
+              <div className="ins-big" style={{ color: predicted.predicted != null ? pctColor(predicted.predicted) : "#5a6478" }}>
+                {predicted.predicted != null ? predicted.predicted + "%" : "—"}
+              </div>
+              <div className="ins-sub">Confidence: {predicted.confidence}</div>
+            </div>
+            <div className="ins-card">
+              <div className="ins-top">{tl.label === "Declining" ? <TrendingDown size={15} /> : <TrendingUp size={15} />} Trend</div>
+              <div className="ins-big" style={{ fontSize: 17 }}>{tl.label}</div>
+              <div className="arrow-row">{arrows.map((a, i) => (
+                <span key={i} className="arrow-pill" style={{ color: pctColor(a) }}>{a}{i < arrows.length - 1 ? <span className="arr">→</span> : null}</span>
+              ))}</div>
+            </div>
+          </div>
+
+          {/* ── Badges ── */}
+          {myBadges.length > 0 && (
+            <div className="badge-row">
+              {myBadges.map((b) => { const Ic = BADGE_ICONS[b.icon] || Award; return (
+                <span className="badge-chip" key={b.key}><Ic size={14} /> {b.label}</span>
+              ); })}
+            </div>
+          )}
+
+          {/* ── Next Target ── */}
+          <div className="target-box">
+            <div className="target-head"><Target size={16} /> Next Target</div>
+            <div className="target-flow">
+              <div className="tf"><span>Current Avg</span><b>{target.current}%</b></div>
+              <ChevronRight size={18} className="tf-arrow" />
+              <div className="tf"><span>Next Target</span><b style={{ color: "#34d399" }}>{target.target}%</b></div>
+              <div className="tf"><span>Gap</span><b style={{ color: "#f5b544" }}>+{target.gap}%</b></div>
+            </div>
+            {target.subjects.length > 0 && (
+              <div className="target-needs">
+                {target.subjects.slice(0, 4).map((s) => (
+                  <span key={s.name} className="need-pill">+{s.needMarks} marks <b>{s.name}</b></span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Strength & Weakness ── */}
+          <h2 className="section-label">Strength &amp; Weakness</h2>
+          <div className="sw-grid">
+            {sStats.map((s) => (
+              <div className="sw-row" key={s.name}>
+                <div className="sw-main"><span className="sw-name">{s.name}</span>
+                  <span className={"pill " + s.status.toLowerCase()}>{s.status}</span></div>
+                <div className="sw-bar"><div className="sw-fill" style={{ width: Math.max(s.pct, 3) + "%", background: pctColor(s.pct) }} /></div>
+                <div className="sw-meta"><b style={{ color: pctColor(s.pct) }}>{s.pct}%</b><span>{s.action}</span></div>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Highlights: best/weak subject, best/worst test, ranks ── */}
+          <div className="hl-grid">
+            <div className="hl-card up"><Sparkles size={15} /><div><span>Strongest Subject</span><b>{sStats[0]?.name || "—"}</b><small>{sStats[0] ? sStats[0].pct + "%" : ""}</small></div></div>
+            <div className="hl-card down"><AlertTriangle size={15} /><div><span>Weakest Subject</span><b>{sStats.length > 1 ? sStats[sStats.length - 1].name : "—"}</b><small>{sStats.length > 1 ? sStats[sStats.length - 1].pct + "%" : ""}</small></div></div>
+            <div className="hl-card up"><Award size={15} /><div><span>Best Test</span><b>{bwTest.best?.testName || "—"}</b><small>{bwTest.best ? round(bwTest.best.percentage) + "%" : ""}</small></div></div>
+            <div className="hl-card">
+              {move && move.delta > 0 ? <ArrowUp size={15} color="#34d399" /> : move && move.delta < 0 ? <ArrowDown size={15} color="#fb7185" /> : <Minus size={15} />}
+              <div><span>Rank Movement</span>
+                <b>{latestRank ? "#" + latestRank.rank : "—"}{houseRank ? <span className="hr"> · House #{houseRank.rank}</span> : ""}</b>
+                <small>{move && move.previous ? (move.delta > 0 ? `+${move.delta} upar` : move.delta < 0 ? `${move.delta} neeche` : "same") : "first test"}</small></div>
+            </div>
+          </div>
+
+          {/* ── Smart Improvement Plan ── */}
+          {plan && (plan.plan7.length > 0 || plan.strongSubjects.length > 0) && (
+            <div className="plan-box">
+              <div className="plan-head"><Zap size={16} /> Smart Improvement Plan <span className="plan-tgt">Target {plan.nextTargetPct}%</span></div>
+              {plan.plan7.length > 0 && <div className="plan-sec"><span className="plan-lab">Next 7 days</span><ul>{plan.plan7.map((p, i) => <li key={i}>{p}</li>)}</ul></div>}
+              {plan.plan15.length > 0 && <div className="plan-sec"><span className="plan-lab">Next 15 days</span><ul>{plan.plan15.map((p, i) => <li key={i}>{p}</li>)}</ul></div>}
+            </div>
+          )}
+
+          {/* ── Motivation banner ── */}
+          <div className="msg-banner" style={{ "--c": pctColor(latest) }}><Sparkles size={16} /> {message}</div>
+
           <div className="charts">
             <div className="chart-card"><div className="chart-title"><TrendingUp size={15} /> Percentage Trend</div>
               <ResponsiveContainer width="100%" height={210}>
@@ -538,7 +710,7 @@ function StudentView({ student, tests, rankOf, readOnly, onBack, onAddTest, onEd
                 <span className="tt-rank">#{r.rank}<small>/{r.total}</small></span>
                 {!readOnly && <span className="tt-actions">
                   <button onClick={() => onEditTest(t)} title="Edit"><Pencil size={13} /></button>
-                  <button className="danger" onClick={() => onDeleteTest(t.id)} title="Delete"><Trash2 size={13} /></button>
+                  <button className="danger" onClick={() => setConfirmTest(t)} title="Delete"><Trash2 size={13} /></button>
                 </span>}
               </div>); })}
           </div>
@@ -551,6 +723,16 @@ function StudentView({ student, tests, rankOf, readOnly, onBack, onAddTest, onEd
             <p className="modal-desc">{student.name} aur unke saare tests permanently delete ho jayenge.</p>
             <div className="modal-foot"><button className="btn ghost" onClick={() => setConfirmDel(false)}>Cancel</button>
               <button className="btn danger-solid" onClick={onDeleteStudent}>Delete</button></div>
+          </div>
+        </div>
+      )}
+      {confirmTest && (
+        <div className="overlay" onClick={() => setConfirmTest(null)}>
+          <div className="modal sm" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Delete this test?</h3>
+            <p className="modal-desc"><b>{confirmTest.testName}</b> ({fmtDate(confirmTest.date)}) — {confirmTest.total}/{confirmTest.maxTotal}, {round(confirmTest.percentage)}% permanently delete ho jayega.</p>
+            <div className="modal-foot"><button className="btn ghost" onClick={() => setConfirmTest(null)}>Cancel</button>
+              <button className="btn danger-solid" onClick={() => { onDeleteTest(confirmTest.id); setConfirmTest(null); }}>Delete Test</button></div>
           </div>
         </div>
       )}
@@ -601,22 +783,42 @@ function UploadPicker({ catStudents, onClose, onPick, onAddStudent }) {
 
 /* ───────────────────────── Bulk Upload (Excel) ───────────────────────── */
 
-function BulkUploadModal({ catStudents, onClose, onConfirm }) {
+function BulkUploadModal({ catStudents, existingTests = [], onClose, onConfirm }) {
   const [cat, setCat] = useState(null);
   const [testName, setTestName] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [mode, setMode] = useState("full");
+  const [subjects, setSubjects] = useState([]); // {name, maxMarks}
   const [parsed, setParsed] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState(null);
-  const subjects = cat ? DEFAULT_SUBJECTS[cat] : [];
+
+  const pickCat = (k) => {
+    setCat(k); setParsed(null); setErr(""); setMode("full");
+    setSubjects(DEFAULT_SUBJECTS[k].map((s) => ({ name: s.name, maxMarks: s.maxMarks })));
+  };
+  const switchMode = (m) => {
+    if (m === mode) return;
+    setMode(m); setParsed(null); setErr("");
+    if (m === "single") setSubjects([{ name: "Maths", maxMarks: "" }]);
+    else setSubjects(DEFAULT_SUBJECTS[cat].map((s) => ({ name: s.name, maxMarks: s.maxMarks })));
+  };
+  const setSub = (i, key, val) => { setSubjects((arr) => arr.map((s, j) => (j === i ? { ...s, [key]: val } : s))); setParsed(null); };
+  const addSub = () => { setSubjects((arr) => [...arr, { name: "", maxMarks: 100 }]); setParsed(null); };
+  const removeSub = (i) => { setSubjects((arr) => arr.filter((_, j) => j !== i)); setParsed(null); };
+
+  const cleanSubs = subjects.filter((s) => s.name.trim() && Number(s.maxMarks) > 0)
+    .map((s) => ({ name: s.name.trim(), maxMarks: Number(s.maxMarks) }));
+  const subjectsReady = cleanSubs.length > 0 && cleanSubs.length === subjects.filter((s) => s.name.trim()).length;
+  const ready = testName.trim() && subjectsReady;
 
   const downloadTemplate = () => {
-    const headers = ["Roll", "Name", ...subjects.map((s) => `${s.name} (/${s.maxMarks})`)];
+    const headers = ["Roll", "Name", "House", ...cleanSubs.map((s) => `${s.name} (/${s.maxMarks})`)];
     const ws = XLSX.utils.aoa_to_sheet([headers]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Marks");
-    XLSX.writeFile(wb, `${CATEGORIES[cat].label.replace(/\s/g, "")}_template.xlsx`);
+    XLSX.writeFile(wb, `${CATEGORIES[cat].label.replace(/\s/g, "")}_${testName.trim().replace(/\s/g, "") || "test"}.xlsx`);
   };
 
   const handleFile = async (e) => {
@@ -631,32 +833,49 @@ function BulkUploadModal({ catStudents, onClose, onConfirm }) {
       rows.forEach((row) => {
         const keys = Object.keys(row);
         const rollKey = keys.find((k) => k.toLowerCase().includes("roll"));
-        const nameKey = keys.find((k) => k.toLowerCase().includes("name"));
+        const nameKey = keys.find((k) => k.toLowerCase().includes("name") && !k.toLowerCase().includes("roll"));
+        const houseKey = keys.find((k) => k.toLowerCase().includes("house"));
         const roll = String(row[rollKey] ?? "").trim();
         if (!roll) return;
-        const subs = subjects.map((s) => {
+        const subs = cleanSubs.map((s) => {
           const k = keys.find((kk) => kk.toLowerCase().includes(s.name.toLowerCase()));
-          return { name: s.name, marks: Number(row[k]) || 0, maxMarks: s.maxMarks };
+          let m = Number(row[k]) || 0;
+          if (m < 0) m = 0;
+          if (m > s.maxMarks) m = s.maxMarks; // marks > out of ko clamp
+          return { name: s.name, marks: m, maxMarks: s.maxMarks };
         });
         const total = subs.reduce((a, x) => a + x.marks, 0);
         const maxTotal = subs.reduce((a, x) => a + x.maxMarks, 0);
         const percentage = maxTotal ? Math.round((total / maxTotal) * 1000) / 10 : 0;
-        out.push({ roll, name: String(row[nameKey] ?? "").trim(), subjects: subs, total, maxTotal, percentage });
+        out.push({ roll, name: String(row[nameKey] ?? "").trim(), house: houseKey ? String(row[houseKey] ?? "").trim() : "", subjects: subs, total, maxTotal, percentage });
       });
       if (!out.length) return setErr("Koi valid row nahi mili. Template ka format use karein.");
       setParsed(out);
     } catch { setErr("File padhne mein dikkat. Sahi Excel (.xlsx) ya CSV file dalein."); }
   };
 
-  const existRolls = cat ? new Set(catStudents(cat).map((s) => s.roll)) : new Set();
-  const matched = parsed ? parsed.filter((p) => existRolls.has(p.roll)).length : 0;
-  const newWithName = parsed ? parsed.filter((p) => !existRolls.has(p.roll) && p.name).length : 0;
-  const willSkip = parsed ? parsed.filter((p) => !existRolls.has(p.roll) && !p.name).length : 0;
+  // ---- preview analysis (duplicate + matching) ----
+  const studs = cat ? catStudents(cat) : [];
+  const rollToId = {}; studs.forEach((s) => (rollToId[s.roll] = s.id));
+  const existRolls = new Set(studs.map((s) => s.roll));
+  const tnameL = testName.trim().toLowerCase();
+  const alreadyHasTest = (roll) => {
+    const sid = rollToId[roll]; if (!sid) return false;
+    return existingTests.some((t) => t.studentId === sid && t.category === cat && (t.testName || "").trim().toLowerCase() === tnameL);
+  };
+  const seenRolls = {}; (parsed || []).forEach((p) => (seenRolls[p.roll] = (seenRolls[p.roll] || 0) + 1));
+  const dupRows = parsed ? parsed.filter((p) => alreadyHasTest(p.roll)) : [];
+  const dupInExcel = parsed ? Object.values(seenRolls).filter((n) => n > 1).length : 0;
+  const uploadable = parsed ? parsed.filter((p) => !alreadyHasTest(p.roll) && (existRolls.has(p.roll) || p.name)) : [];
+  const matched = uploadable.filter((p) => existRolls.has(p.roll)).length;
+  const newWithName = uploadable.filter((p) => !existRolls.has(p.roll) && p.name).length;
+  const willSkip = parsed ? parsed.filter((p) => !alreadyHasTest(p.roll) && !existRolls.has(p.roll) && !p.name).length : 0;
 
   const confirm = async () => {
     setBusy(true);
-    const res = await onConfirm({ category: cat, testName: testName.trim(), date, parsed });
-    setBusy(false); setSummary(res);
+    const res = await onConfirm({ category: cat, testName: testName.trim(), date, parsed: uploadable });
+    setBusy(false);
+    setSummary({ ...res, duplicates: dupRows.length });
   };
 
   return (
@@ -669,7 +888,10 @@ function BulkUploadModal({ catStudents, onClose, onConfirm }) {
             <CheckCircle2 size={40} color="#34d399" />
             <h3>Upload complete!</h3>
             <p><b>{summary.added}</b> tests upload hue{summary.created ? `, ${summary.created} naye students bhi bane` : ""}.</p>
-            {summary.skipped.length > 0 && (
+            {summary.duplicates > 0 && (
+              <p className="skip-note"><AlertCircle size={14} /> {summary.duplicates} row skip hui — ye test in students ke paas pehle se tha (duplicate).</p>
+            )}
+            {summary.skipped?.length > 0 && (
               <p className="skip-note"><AlertCircle size={14} /> {summary.skipped.length} row skip hui (roll match nahi hua aur Name bhi nahi tha): {summary.skipped.slice(0, 8).join(", ")}{summary.skipped.length > 8 ? "…" : ""}</p>
             )}
             <button className="btn primary full" onClick={onClose}>Done</button>
@@ -679,23 +901,40 @@ function BulkUploadModal({ catStudents, onClose, onConfirm }) {
             <p className="step-label">1 · Class chuniye</p>
             <div className="class-pick">
               {CAT_ORDER.map((k) => { const c = CATEGORIES[k]; return (
-                <button key={k} className={"class-btn" + (cat === k ? " on" : "")} style={{ "--c": c.color }} onClick={() => { setCat(k); setParsed(null); setErr(""); }}>
+                <button key={k} className={"class-btn" + (cat === k ? " on" : "")} style={{ "--c": c.color }} onClick={() => pickCat(k)}>
                   <c.icon size={18} /> {c.label}<small>{catStudents(k).length} students</small>
                 </button>); })}
             </div>
 
             {cat && (<>
-              <div className="grid2">
-                <label className="field"><span>Test Name *</span><input value={testName} onChange={(e) => setTestName(e.target.value)} placeholder="e.g. Weekly Test 5" /></label>
+              <p className="step-label">2 · Test Type &amp; Subjects</p>
+              <div className="seg full" style={{ marginBottom: 10 }}>
+                <button className={mode === "single" ? "on" : ""} onClick={() => switchMode("single")}>Single Subject</button>
+                <button className={mode === "full" ? "on" : ""} onClick={() => switchMode("full")}>Full Subjects</button>
+              </div>
+              <div className="subj-head"><span>Subjects &amp; Out of</span>{mode === "full" && <button className="add-subj" onClick={addSub}><Plus size={13} /> Subject</button>}</div>
+              <div className="bsub-list">
+                <div className="bsub-row labels"><span>Subject</span><span>Out of</span><span></span></div>
+                {subjects.map((s, i) => (
+                  <div className="bsub-row" key={i}>
+                    <input value={s.name} placeholder="Subject" onChange={(e) => setSub(i, "name", e.target.value)} />
+                    <input type="number" value={s.maxMarks} placeholder={mode === "single" ? "e.g. 300" : "100"} min="1" onChange={(e) => setSub(i, "maxMarks", e.target.value)} />
+                    <button className="rm" onClick={() => removeSub(i)} disabled={mode === "single" || subjects.length <= 1}><X size={14} /></button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid2" style={{ marginTop: 6 }}>
+                <label className="field"><span>Test Name *</span><input value={testName} onChange={(e) => { setTestName(e.target.value); setParsed(null); }} placeholder="e.g. Maths Major / Weekly Test 5" /></label>
                 <label className="field"><span>Date</span><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
               </div>
 
-              <p className="step-label">2 · Template download karke marks bharein</p>
-              <p className="bulk-hint">Columns: Roll, Name, aur har subject ({subjects.map((s) => `${s.name} /${s.maxMarks}`).join(", ")}). Roll se purane student match honge; naya roll + Name diya to naya student ban jayega.</p>
-              <button className="btn ghost" disabled={!testName.trim()} onClick={downloadTemplate}><Download size={15} /> Download Template (.xlsx)</button>
+              <p className="step-label">3 · Template download karke marks bharein</p>
+              <p className="bulk-hint">Columns: Roll, Name, House (optional), aur {cleanSubs.length ? cleanSubs.map((s) => `${s.name} /${s.maxMarks}`).join(", ") : "subjects"}. Roll se purane student match honge; naya roll + Name diya to naya student ban jayega.</p>
+              <button className="btn ghost" disabled={!ready} onClick={downloadTemplate}><Download size={15} /> Download Template (.xlsx)</button>
 
-              <p className="step-label" style={{ marginTop: 18 }}>3 · Bhari hui file upload karein</p>
-              <input className="file-input" type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} disabled={!testName.trim()} />
+              <p className="step-label" style={{ marginTop: 18 }}>4 · Bhari hui file upload karein</p>
+              <input className="file-input" type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} disabled={!ready} />
               {err && <div className="auth-err" style={{ marginTop: 12 }}><AlertCircle size={14} /> {err}</div>}
 
               {parsed && (
@@ -703,14 +942,16 @@ function BulkUploadModal({ catStudents, onClose, onConfirm }) {
                   <div><b>{parsed.length}</b> rows mili</div>
                   <div className="ok">✓ {matched} existing match</div>
                   {newWithName > 0 && <div className="new">+ {newWithName} naye banenge</div>}
-                  {willSkip > 0 && <div className="skip">⚠ {willSkip} skip honge (Name nahi)</div>}
+                  {dupRows.length > 0 && <div className="skip">⚠ {dupRows.length} duplicate (pehle se hai) — skip</div>}
+                  {dupInExcel > 0 && <div className="skip">⚠ {dupInExcel} roll Excel me 2 baar</div>}
+                  {willSkip > 0 && <div className="skip">⚠ {willSkip} skip (Name nahi)</div>}
                 </div>
               )}
             </>)}
 
             <div className="modal-foot">
               <button className="btn ghost" onClick={onClose}>Cancel</button>
-              <button className="btn primary" disabled={!parsed || !testName.trim() || busy} onClick={confirm}>{busy ? "Uploading…" : "Upload All"}</button>
+              <button className="btn primary" disabled={!parsed || !ready || busy || uploadable.length === 0} onClick={confirm}>{busy ? "Uploading…" : `Upload ${uploadable.length || ""}`.trim()}</button>
             </div>
           </>
         )}
@@ -726,9 +967,10 @@ function StudentModal({ info, existingRolls, onClose, onSave }) {
   const c = CATEGORIES[info.category];
   const [name, setName] = useState(edit?.name || "");
   const [roll, setRoll] = useState(edit?.roll || "");
+  const [house, setHouse] = useState(edit?.house || "");
   const dupRoll = roll.trim() && existingRolls.includes(roll.trim()) && roll.trim() !== edit?.roll;
   const valid = name.trim() && roll.trim() && !dupRoll;
-  const submit = () => { if (!valid) return; onSave({ id: edit?.id, name: name.trim(), roll: roll.trim(), category: info.category }); };
+  const submit = () => { if (!valid) return; onSave({ id: edit?.id, name: name.trim(), roll: roll.trim(), category: info.category, house }); };
   return (
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -736,6 +978,16 @@ function StudentModal({ info, existingRolls, onClose, onSave }) {
         <label className="field"><span>Student Name *</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Aarav Singh" autoFocus /></label>
         <label className="field"><span>Roll Number * (student isi se login karega)</span><input value={roll} onChange={(e) => setRoll(e.target.value)} placeholder="e.g. 24" /></label>
         {dupRoll && <div className="auth-err"><AlertCircle size={14} /> Ye roll number pehle se kisi student ka hai.</div>}
+        <label className="field"><span>House</span>
+          <div className="house-pick">
+            <button type="button" className={"house-chip" + (house === "" ? " on" : "")} style={{ "--c": "#8a94ad" }} onClick={() => setHouse("")}>None</button>
+            {HOUSE_NAMES.map((h) => (
+              <button type="button" key={h} className={"house-chip" + (house === h ? " on" : "")} style={{ "--c": houseColor(h) }} onClick={() => setHouse(h)}>
+                <span className="house-dot" /> {h}
+              </button>
+            ))}
+          </div>
+        </label>
         <div className="modal-foot"><button className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={!valid} onClick={submit}>{edit ? "Save" : "Add Student"}</button></div>
       </div>
@@ -750,9 +1002,17 @@ function TestModal({ info, onClose, onSave }) {
   const c = CATEGORIES[info.category];
   const [testName, setTestName] = useState(edit?.testName || "");
   const [date, setDate] = useState(edit?.date || new Date().toISOString().slice(0, 10));
+  // Test type: "single" = ek hi subject (e.g. Maths /300), "full" = poore subjects
+  const [mode, setMode] = useState(edit ? (edit.subjects?.length === 1 ? "single" : "full") : "full");
   const [subjects, setSubjects] = useState(
     edit?.subjects?.map((s) => ({ ...s })) || DEFAULT_SUBJECTS[info.category].map((s) => ({ name: s.name, marks: "", maxMarks: s.maxMarks }))
   );
+  const switchMode = (m) => {
+    if (m === mode) return;
+    setMode(m);
+    if (m === "single") setSubjects([{ name: "Maths", marks: "", maxMarks: "" }]);
+    else setSubjects(DEFAULT_SUBJECTS[info.category].map((s) => ({ name: s.name, marks: "", maxMarks: s.maxMarks })));
+  };
   const setSub = (i, key, val) => setSubjects((arr) => arr.map((s, j) => (j === i ? { ...s, [key]: val } : s)));
   const addSub = () => setSubjects((arr) => [...arr, { name: "", marks: "", maxMarks: 100 }]);
   const removeSub = (i) => setSubjects((arr) => arr.filter((_, j) => j !== i));
@@ -769,26 +1029,38 @@ function TestModal({ info, onClose, onSave }) {
     <div className="overlay" onClick={onClose}>
       <div className="modal lg" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h3 className="modal-title">{edit ? "Edit Test" : "Add Test"} <span className="tag" style={{ "--c": c.color }}>{c.short}</span></h3><button className="x" onClick={onClose}><X size={18} /></button></div>
+
+        <div className="subj-head"><span>Test Type</span></div>
+        <div className="seg full" style={{ marginBottom: 6 }}>
+          <button className={mode === "single" ? "on" : ""} onClick={() => switchMode("single")}>Single Subject</button>
+          <button className={mode === "full" ? "on" : ""} onClick={() => switchMode("full")}>Full Subjects</button>
+        </div>
+        <p className="bulk-hint" style={{ margin: "0 0 14px" }}>
+          {mode === "single"
+            ? "Ek hi subject ka test (e.g. sirf Maths /300). Neeche 'Out of' me test ke total marks likhein."
+            : "Poore subjects wala exam. Har subject ke marks aur 'Out of' daalein."}
+        </p>
+
         <div className="grid2">
           <label className="field"><span>Test Name *</span><input value={testName} onChange={(e) => setTestName(e.target.value)} placeholder="e.g. Weekly Test 5" autoFocus /></label>
           <label className="field"><span>Date</span><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         </div>
-        <div className="subj-head"><span>Subjects &amp; Marks</span><button className="add-subj" onClick={addSub}><Plus size={13} /> Subject</button></div>
+        <div className="subj-head"><span>Subjects &amp; Marks</span>{mode === "full" && <button className="add-subj" onClick={addSub}><Plus size={13} /> Subject</button>}</div>
         <div className="subj-list">
           <div className="subj-row labels"><span>Subject</span><span>Marks</span><span>Out of</span><span></span></div>
           {subjects.map((s, i) => (
             <div className="subj-row" key={i}>
               <input value={s.name} placeholder="Subject" onChange={(e) => setSub(i, "name", e.target.value)} />
               <input type="number" value={s.marks} placeholder="0" min="0" onChange={(e) => setSub(i, "marks", e.target.value)} />
-              <input type="number" value={s.maxMarks} placeholder="100" min="1" onChange={(e) => setSub(i, "maxMarks", e.target.value)} />
-              <button className="rm" onClick={() => removeSub(i)} disabled={subjects.length <= 1}><X size={14} /></button>
+              <input type="number" value={s.maxMarks} placeholder={mode === "single" ? "e.g. 300" : "100"} min="1" onChange={(e) => setSub(i, "maxMarks", e.target.value)} />
+              <button className="rm" onClick={() => removeSub(i)} disabled={mode === "single" || subjects.length <= 1}><X size={14} /></button>
             </div>
           ))}
         </div>
         <div className="test-summary">
           <div><span>Total</span><b>{total}<small>/{maxTotal}</small></b></div>
           <div><span>Percentage</span><b style={{ color: pctColor(pct) }}>{pct}%</b></div>
-          <div className="note"><Trophy size={13} /> Save karte hi student ke phone par analytics update ho jayega. Rank auto-calculate hoga.</div>
+          <div className="note"><Trophy size={13} /> Percentage = Total ÷ (sum of "Out of"). Rank auto-calculate hoga.</div>
         </div>
         <div className="modal-foot"><button className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={!valid} onClick={submit}>{edit ? "Save Test" : "Upload Test"}</button></div>
@@ -881,6 +1153,15 @@ const STYLES = `
 .seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:3px;}
 .seg button{background:none;border:none;color:var(--muted);font-family:'Manrope';font-weight:600;font-size:12.5px;padding:7px 12px;border-radius:7px;cursor:pointer;transition:.2s;}
 .seg button.on{background:var(--surface2);color:var(--tx);}
+.seg.full{display:flex;width:100%;}
+.seg.full button{flex:1;text-align:center;}
+.house-pick{display:flex;flex-wrap:wrap;gap:7px;}
+.house-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--line2);color:var(--tx);font-family:'Manrope';font-weight:600;font-size:13px;padding:8px 12px;border-radius:9px;cursor:pointer;transition:.18s;}
+.house-chip .house-dot{width:9px;height:9px;border-radius:50%;background:var(--c);}
+.house-chip:hover{border-color:color-mix(in srgb,var(--c) 50%,transparent);}
+.house-chip.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 14%,var(--bg2));color:var(--c);}
+.house-tag{display:inline-flex;align-items:center;gap:5px;margin-left:8px;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:6px;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);}
+.house-tag .house-dot{width:7px;height:7px;border-radius:50%;background:var(--c);}
 .student-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:13px;}
 .student-card{display:flex;align-items:center;gap:13px;text-align:left;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;color:var(--tx);transition:.2s;}
 .student-card:hover{border-color:color-mix(in srgb,var(--c) 45%,transparent);transform:translateY(-2px);box-shadow:0 10px 26px rgba(0,0,0,.35);}
@@ -992,4 +1273,81 @@ const STYLES = `
 .tt-name{grid-column:1/2;}.tt-actions{grid-column:2/3;grid-row:1/3;}
 .tt-muted,.tt-rank{font-size:12px;}
 }
+/* ── Phase 1 analytics UI ── */
+.insight-grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:13px;margin-bottom:13px;}
+.health-card{background:linear-gradient(165deg,color-mix(in srgb,var(--c) 14%,var(--surface)),var(--bg2));border:1px solid color-mix(in srgb,var(--c) 35%,var(--line));border-radius:16px;padding:16px 17px;}
+.health-top{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:var(--muted);}
+.health-score{font-family:'Space Mono',monospace;font-size:34px;font-weight:700;line-height:1;margin:9px 0 3px;letter-spacing:-1px;}
+.health-score small{font-size:14px;color:var(--muted);}
+.health-grade{font-weight:700;font-size:13.5px;}
+.ins-card{background:linear-gradient(165deg,var(--surface),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:16px 17px;}
+.ins-top{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:var(--muted);}
+.ins-big{font-family:'Space Mono',monospace;font-size:26px;font-weight:700;line-height:1;margin:9px 0 4px;letter-spacing:-.5px;}
+.ins-sub{font-size:11.5px;color:var(--muted);}
+.arrow-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:4px;font-family:'Space Mono',monospace;font-size:13px;font-weight:700;}
+.arrow-pill .arr{color:var(--muted);margin:0 4px;font-weight:400;}
+.badge-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+.badge-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--gold);background:rgba(245,181,68,.12);border:1px solid rgba(245,181,68,.3);border-radius:99px;padding:6px 12px;}
+.target-box{background:linear-gradient(165deg,var(--surface),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:8px;}
+.target-head{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:700;color:var(--muted);margin-bottom:13px;}
+.target-flow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+.tf span{display:block;font-size:11px;color:var(--muted);margin-bottom:3px;}
+.tf b{font-family:'Space Mono',monospace;font-size:21px;}
+.tf-arrow{color:var(--muted);}
+.target-needs{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+.need-pill{font-size:12px;color:var(--tx);background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:6px 11px;}
+.need-pill b{color:var(--gold);}
+.sw-grid{display:flex;flex-direction:column;gap:10px;}
+.sw-row{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:13px 15px;}
+.sw-main{display:flex;align-items:center;gap:9px;margin-bottom:9px;}
+.sw-name{font-weight:700;font-size:14px;}
+.pill{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:6px;text-transform:uppercase;letter-spacing:.4px;}
+.pill.strong{color:#34d399;background:rgba(52,211,153,.13);}
+.pill.average{color:#f5b544;background:rgba(245,181,68,.13);}
+.pill.weak{color:#fb7185;background:rgba(251,113,133,.13);}
+.sw-bar{height:6px;background:rgba(255,255,255,.07);border-radius:99px;overflow:hidden;margin-bottom:8px;}
+.sw-fill{height:100%;border-radius:99px;transition:width .6s;}
+.sw-meta{display:flex;align-items:baseline;gap:10px;}
+.sw-meta b{font-family:'Space Mono',monospace;font-size:15px;}
+.sw-meta span{font-size:12px;color:var(--muted);}
+.hl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0 8px;}
+.hl-card{display:flex;align-items:flex-start;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 15px;}
+.hl-card>svg{flex-shrink:0;margin-top:2px;color:var(--muted);}
+.hl-card.up>svg{color:#34d399;}.hl-card.down>svg{color:#fb7185;}
+.hl-card span{display:block;font-size:11px;color:var(--muted);}
+.hl-card b{display:block;font-size:15px;font-weight:700;margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
+.hl-card small{font-family:'Space Mono',monospace;font-size:12px;color:var(--muted);}
+.hl-card .hr{font-weight:400;color:var(--muted);font-size:12px;}
+.plan-box{background:linear-gradient(165deg,var(--surface),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin:16px 0 8px;}
+.plan-head{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;margin-bottom:12px;}
+.plan-head svg{color:var(--gold);}
+.plan-tgt{margin-left:auto;font-size:11.5px;font-weight:700;color:#34d399;background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.25);border-radius:99px;padding:4px 11px;}
+.plan-sec{margin-bottom:10px;}
+.plan-lab{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);}
+.plan-sec ul{margin:6px 0 0;padding-left:18px;}
+.plan-sec li{font-size:13px;color:var(--tx);margin:3px 0;}
+.msg-banner{display:flex;align-items:center;gap:10px;background:color-mix(in srgb,var(--c) 11%,var(--surface));border:1px solid color-mix(in srgb,var(--c) 30%,var(--line));border-left:3px solid var(--c);border-radius:12px;padding:13px 16px;font-size:13.5px;font-weight:600;margin:14px 0 8px;}
+.msg-banner svg{color:var(--c);flex-shrink:0;}
+.house-lb{display:flex;flex-direction:column;gap:8px;}
+.house-lb-row{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 15px;}
+.lb-rank{font-family:'Space Mono',monospace;font-weight:700;font-size:15px;color:var(--c);width:30px;}
+.lb-dot{width:11px;height:11px;border-radius:50%;background:var(--c);flex-shrink:0;}
+.lb-main{flex:1;min-width:0;}
+.lb-name{font-weight:700;font-size:14px;}
+.lb-sub{font-size:11.5px;color:var(--muted);margin-top:2px;}
+.lb-avg{font-family:'Space Mono',monospace;font-weight:700;font-size:16px;}
+.risk-list{display:flex;flex-direction:column;gap:8px;}
+.risk-row{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 15px;}
+.risk-main{flex:1;min-width:0;}
+.risk-name{font-weight:700;font-size:14px;}
+.risk-name small{font-weight:400;color:var(--muted);font-size:11.5px;}
+.risk-reasons{font-size:12px;color:#fb9aa8;margin-top:2px;}
+.risk-nums{text-align:right;}
+.risk-nums b{display:block;font-family:'Space Mono',monospace;font-size:16px;}
+.risk-nums small{font-size:11px;color:var(--muted);}
+.bsub-list{display:flex;flex-direction:column;gap:7px;margin-bottom:6px;}
+.bsub-row{display:grid;grid-template-columns:1fr 100px 34px;gap:8px;align-items:center;}
+.bsub-row.labels{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);padding:0 2px;}
+.bsub-row input{background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:9px 10px;color:var(--tx);font-family:'Manrope';font-size:13.5px;outline:none;width:100%;}
+.bsub-row input:focus{border-color:var(--gold);}
 `;
